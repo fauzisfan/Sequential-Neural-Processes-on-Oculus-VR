@@ -7,7 +7,7 @@ Please kindly visit these repos to deeply understand on SNP and NP,
 
 2. NP (Family of Neural Processes) : https://github.com/deepmind/neural-processes
 
-Big thanks to those works that previously done the research
+Big thanks to those works that previously did the research
 
 1. Sequential Neural Processes: Gautam Singh, Jaesik Yoon, Youngsung Son, Sungjin Ahn. Sequential Neural Processes. In International Conference on Machine Learning 2019.
 
