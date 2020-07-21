@@ -3,9 +3,9 @@ This Respository contains SNP Implementation on Oculus VR for Orientation Predic
 
 Please kindly visit these repos to deeply understand on SNP and NP,
 
-SNP (Sequential Neural Process) : https://github.com/singhgautam/snp/tree/master/snp
+1. SNP (Sequential Neural Process) : https://github.com/singhgautam/snp/tree/master/snp
 
-NP (Family of Neural Processes) : https://github.com/deepmind/neural-processes
+2. NP (Family of Neural Processes) : https://github.com/deepmind/neural-processes
 
 Big thanks to those works that previously done the research
 
