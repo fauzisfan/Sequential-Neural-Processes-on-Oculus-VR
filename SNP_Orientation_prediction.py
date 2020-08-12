@@ -146,23 +146,16 @@ class GPCurvesReader(object):
                batch_size,
                max_num_context,
                orientation,
-               x_size=1,
-               y_size=1,
-               l1_scale=0.6,
-               sigma_scale=1.0,
-               random_kernel_parameters=True,
-               testing=False):
+               len_gen,
+               testing=False,
+               seed = None):
 
     self._batch_size = batch_size
     self._max_num_context = max_num_context
-    self._x_size = x_size
-    self._y_size = y_size
-    self._l1_scale = l1_scale
-    self._sigma_scale = sigma_scale
-    self._random_kernel_parameters = random_kernel_parameters
     self._testing = testing
     self._orientaion = orientation
-#    self._i = i
+    self._seed = seed
+    self._len_gen  = len_gen
 
   def NP_dataset(self, x, y):
     if self._orientaion == "pitch":
@@ -171,14 +164,22 @@ class GPCurvesReader(object):
         ori = 1
     elif self._orientaion == "yaw":
         ori = 2
+    
 
-    x_values = tf.tile( tf.expand_dims(x[:,ori], axis=0), [self._batch_size, 1])
+    if self._testing:
+        x_values = tf.tile( tf.expand_dims(x[:,ori], axis=0), [self._batch_size, 1])
+    else:
+        x_values = tf.expand_dims(x[:,ori], axis=0)
+        for m in range(self._batch_size):
+            if (m!=ori):
+                x_values = tf.concat([x_values,tf.expand_dims(x[:,m], axis=0)], axis=0)
     x_values = tf.cast(tf.expand_dims(x_values, axis=-1), dtype =tf.float32)
     
     y_values = tf.tile( tf.expand_dims(y[:,ori], axis=0), [self._batch_size, 1])
     y_values = tf.cast(tf.expand_dims(y_values, axis=-1), dtype =tf.float32)
     
-    x_axis = tf.tile( tf.expand_dims(np.array(range(len(x))).reshape(-1,1)[:,0], axis=0), [self._batch_size, 1])
+#    x_axis = tf.tile( tf.expand_dims(np.array(range(len(x))).reshape(-1,1)[:,0], axis=0), [self._batch_size, 1])
+    x_axis = tf.tile( tf.expand_dims(tf.range(tf.shape(x)[0]), axis=0), [self._batch_size, 1])
     x_axis = tf.cast(tf.expand_dims(x_axis, axis=-1), dtype =tf.float32)
     
     num_context = tf.random_uniform(
@@ -225,11 +226,26 @@ class GPCurvesReader(object):
     num_total_points_list = []
     num_context_points_list = []
     plot_x = []
-    
     curve_list = []
     
-    for i in range(int(len(x)/data_length)):
-        curve_list.append(self.NP_dataset(x[i*data_length:(i+1)*data_length],y[i*data_length:(i+1)*data_length]))
+#    #Sequential batch
+#    for i in range(self._len_gen):
+#      curve_list.append(self.NP_dataset(x[i*data_length:(i+1)*data_length],y[i*data_length:(i+1)*data_length]))
+    
+#    Sequential data
+    DELAY = tf.constant(data_length)
+#    tf.set_random_seed(self._seed)
+    if self._testing:
+        i = tf.constant(self._seed)
+    else:
+        i = tf.random_uniform(shape=[], minval=0, maxval= len(x)-(DELAY*10)+data_length, dtype=tf.int32)
+    
+    m = 0
+    while m <= self._len_gen:
+        idx = tf.range(i, tf.math.add(i,tf.constant(data_length)))
+        curve_list.append(self.NP_dataset(tf.gather(tf.constant(x),idx, axis=0),tf.gather(tf.constant(y),idx, axis=0)))
+        i = tf.math.add(i,DELAY)
+        m+=1
     
     for t in range(len(curve_list)):
         (context_x, context_y), target_x = curve_list[t].query
@@ -960,12 +976,13 @@ def plot_functions(plot_data, h_x_list=None):
   """
   target_x, target_y, context_x, context_y, pred_y, plot_x, std = plot_data
   plt.figure(figsize=(6.4, 4.8*len(target_x)))
+  err = 0
   for t in range(len(target_x)):
       plt.subplot(len(target_x),1,t+1)
       # Plot everything
       plt.plot(np.array(range(len(target_y[t][0]))).reshape(-1,1), target_y[t][0], 'k:', linewidth=2)
       plt.plot(np.array(range(len(pred_y[t][0]))).reshape(-1,1), pred_y[t][0], 'b', linewidth=2)
-      if len(plot_x[t]) != 0:
+      if len(plot_x[t]) != None:
           plt.plot(plot_x[t][0], context_y[t][0], 'ko', markersize=10)
       if h_x_list is not None:
           h_y_list = []
@@ -988,31 +1005,36 @@ def plot_functions(plot_data, h_x_list=None):
 
       plt.grid()
       ax = plt.gca()
-  plt.show()
+      
+      err+=np.nanmean(np.abs(np.abs(pred_y[t][0,:,0] - target_y[t][0,:,0])), axis=0)
+      
+#  plt.show()
   plt.savefig(os.path.join(log_dir,'img for it-'+str(it)+'.png'))
+  print('MAE Test loss: {}'.format(err/(t+1)))
   
 '''SNP'''
 TRAINING_ITERATIONS = 5000 #@param {type:"number"}
-MAX_CONTEXT_POINTS = 100  #@param {type:"number"}
+MAX_CONTEXT_POINTS = 50  #@param {type:"number"}
 PLOT_AFTER = 1000 #@param {type:"number"}
 HIDDEN_SIZE = 128 #@param {type:"number"}
 MODEL_TYPE = 'SNP' #@param ['NP','SNP']
-#ATTENTION_TYPE = 'uniform' #@param ['uniform','laplace','dot_product','multihead']
+orientation = "yaw"
 random_kernel_parameters=True #@param {type:"boolean"}
 
 tf.reset_default_graph()
+#tf.set_random_seed(2)
 
 beta = tf.placeholder(tf.float32, shape=[])
 
 # Train dataset
 dataset_train = GPCurvesReader(
-    batch_size=16, max_num_context=MAX_CONTEXT_POINTS, orientation = "yaw")
-data_train = dataset_train.SNP_dataset(x_train,t_train, data_length=1000)
+    batch_size=6, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = 10)
+data_train = dataset_train.SNP_dataset(x_train,t_train, data_length=200)
 
 ## Test dataset
 dataset_test = GPCurvesReader(
-    batch_size=1, max_num_context=MAX_CONTEXT_POINTS, orientation = "yaw", testing=True)
-data_test = dataset_test.SNP_dataset(x_test,t_test, data_length = 1000)
+    batch_size=1, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = 10, testing=True, seed = 5000)
+data_test = dataset_test.SNP_dataset(x_test,t_test, data_length =200)
 
 
 latent_encoder_output_sizes = [HIDDEN_SIZE]*4
@@ -1023,8 +1045,7 @@ use_deterministic_path = True
 
 # ANP with multihead attention
 if MODEL_TYPE == 'SNP':
-  attention = Attention(rep='mlp', output_sizes=[HIDDEN_SIZE]*2, 
-                        att_type='multihead')
+  attention = Attention(rep='mlp', output_sizes=[HIDDEN_SIZE]*2, att_type='multihead')
 # NP - equivalent to uniform attention
 elif MODEL_TYPE == 'NP':
   attention = Attention(rep='identity', output_sizes=None, att_type='uniform')
@@ -1061,7 +1082,7 @@ with tf.Session() as sess:
   sess.run(init)
 
   for it in range(TRAINING_ITERATIONS):
-
+#    print(it)
     sess.run([train_step], feed_dict={beta:1.0})
 
     # Plot the predictions in `PLOT_AFTER` intervals
@@ -1076,7 +1097,7 @@ with tf.Session() as sess:
                                              feed_dict={
                                              beta:1.0}
                                              )
-      print('Iteration: {}, loss: {}'.format(it, loss_))
+      print('\nIteration: {}\nELBO Test loss: {}'.format(it, loss_))
       
       plot_data = reordering(query, target_y, pred_y, std_y, plot_x, temporal=True)
       plot_functions(plot_data)
