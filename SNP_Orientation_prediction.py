@@ -72,8 +72,6 @@ train_euler_data = solve_discontinuity(train_euler_data)
 # Create data frame of all features and smoothing
 sliding_window_time = 100
 sliding_window_size = int(np.round(sliding_window_time * system_rate / 1000))
-#sliding_window_size = 29
-SG_sliding_window_size = 81
 
 # anticipation time
 anticipation_time = 300
@@ -125,7 +123,7 @@ normalizer.fit(input_series)
 input_norm = normalizer.transform(input_series)
 
 # Split training and testing data
-x_train, t_train, x_test, t_test = train_test_split_tdnn(input_norm, target_series, TEST_SIZE)
+x_train, t_train, x_test, t_test = train_test_split_tdnn(input_series, target_series, TEST_SIZE)
 
 
 NPRegressionDescription = collections.namedtuple(
@@ -145,14 +143,14 @@ class GPCurvesReader(object):
                orientation,
                len_gen,
                seq_delay,
-               testing=False,
-               seed = None):
+               data_length,
+               testing=False):
 
     self._batch_size = batch_size
     self._max_num_context = max_num_context
     self._testing = testing
     self._orientation = orientation
-    self._seed = seed
+    self._data_length = data_length
     self._seq_delay = seq_delay
     self._len_gen  = len_gen
 
@@ -177,10 +175,10 @@ class GPCurvesReader(object):
                 x_values = tf.concat([x_values,tf.expand_dims(x[:,m], axis=0)], axis=0)
     
     if (self._orientation == "all"):
-        y_values_base = tf.expand_dims(x[:,ori], axis=0)
+        y_values_base = tf.expand_dims(y[:,ori], axis=0)
         for m in range(3):
             if (m!=ori):
-                y_values_base = tf.concat([y_values_base,tf.expand_dims(x[:,m], axis=0)], axis=0)
+                y_values_base = tf.concat([y_values_base,tf.expand_dims(y[:,m], axis=0)], axis=0)
         #Repeat the value multiple times
         m = 1
         y_values = y_values_base
@@ -198,7 +196,7 @@ class GPCurvesReader(object):
     x_axis = tf.cast(tf.expand_dims(x_axis, axis=-1), dtype =tf.float32)
     
     num_context = tf.random_uniform(
-        shape=[], minval=3, maxval= self._max_num_context, dtype=tf.int32)
+        shape=[], minval=1, maxval= self._max_num_context, dtype=tf.int32)
     
     if self._testing:
       num_target = tf.shape(x_values)[1]
@@ -207,14 +205,13 @@ class GPCurvesReader(object):
       target_x = x_values
       target_y = y_values
 
-      # Select the observations
       idx = tf.random_shuffle(tf.range(num_target))
       context_x = tf.gather(x_values, idx[:num_context], axis=1)
       context_y = tf.gather(y_values, idx[:num_context], axis=1)
       plot_x = tf.gather(x_axis, idx[:num_context], axis=1)
     else:
       num_target = tf.random_uniform(shape=(), minval=0, 
-               maxval=self._max_num_context - num_context, dtype=tf.int32)
+               maxval=self._data_length - num_context, dtype=tf.int32)
       num_total_points = num_context + num_target
       # Select the targets which will consist of the context points as well as
       # some new target points
@@ -235,7 +232,7 @@ class GPCurvesReader(object):
         num_context_points=num_context,
         plot_x = plot_x)
     
-  def SNP_dataset(self, x, y, data_length):
+  def SNP_dataset(self, x, y, seed=None):
     context_x_list, context_y_list = [], []
     target_x_list, target_y_list = [], []
     num_total_points_list = []
@@ -243,21 +240,17 @@ class GPCurvesReader(object):
     plot_x = []
     curve_list = []
     
-#    #Sequential batch
-#    for i in range(self._len_gen):
-#      curve_list.append(self.NP_dataset(x[i*data_length:(i+1)*data_length],y[i*data_length:(i+1)*data_length]))
-    
 #    Sequential data
     DELAY = tf.constant(self._seq_delay)
 #    tf.set_random_seed(self._seed)
-    if self._testing:
-        i = tf.constant(self._seed)
+    if seed != None:
+        i = tf.constant(seed)
     else:
-        i = tf.random_uniform(shape=[], minval=0, maxval= len(x)-(DELAY*10)+data_length, dtype=tf.int32)
+        i = tf.random_uniform(shape=[], minval=0, maxval= len(x)-(DELAY*10)+self._data_length, dtype=tf.int32)
         
     m = 0
     while m <= self._len_gen:
-        idx = tf.range(i, tf.math.add(i,tf.constant(data_length)))
+        idx = tf.range(i, tf.math.add(i,tf.constant(self._data_length)))
         curve_list.append(self.NP_dataset(tf.gather(tf.constant(x),idx, axis=0),tf.gather(tf.constant(y),idx, axis=0)))
         i = tf.math.add(i,DELAY)
         m+=1
@@ -945,6 +938,7 @@ class Attention(object):
     else:
       raise NameError(("'att_type' not among ['uniform','laplace','dot_product'"
                        ",'multihead']"))
+
     return rep
 
 # ## Ploting function
@@ -991,11 +985,10 @@ def plot_functions(plot_data, orientation):
   """
   target_x, target_y, context_x, context_y, pred_y, plot_x, std = plot_data
   if orientation == "all":
-      err_pitch = 0
+      err = np.zeros(3)
+      err_99 = np.zeros(3)
       err_pitch_99 = []
-      err_roll = 0
       err_roll_99 = []
-      err_yaw = 0
       err_yaw_99 = []
       '''PLOT PITCH'''
       plt.figure(figsize=(6.4, 4.8*len(target_x)))
@@ -1017,7 +1010,7 @@ def plot_functions(plot_data, orientation):
           plt.grid()
           ax = plt.gca()
           
-          err_pitch+=np.nanmean(np.abs(np.abs(pred_y[t][0,:,0] - target_y[t][0,:,0])), axis=0)
+          err[0]+=np.nanmean(np.abs(np.abs(pred_y[t][0,:,0] - target_y[t][0,:,0])), axis=0)
           err_pitch_99.append(np.nanpercentile(np.abs(np.abs(pred_y[t][0,:,0] - target_y[t][0,:,0])), 99))
           
     #  plt.show()
@@ -1043,7 +1036,7 @@ def plot_functions(plot_data, orientation):
           plt.grid()
           ax = plt.gca()
           
-          err_roll+=np.nanmean(np.abs(np.abs(pred_y[t][1,:,0] - target_y[t][1,:,0])), axis=0)
+          err[1]+=np.nanmean(np.abs(np.abs(pred_y[t][1,:,0] - target_y[t][1,:,0])), axis=0)
           err_roll_99.append(np.nanpercentile(np.abs(np.abs(pred_y[t][1,:,0] - target_y[t][1,:,0])), 99))
     #  plt.show()
       plt.savefig(os.path.join(log_dir,'[roll] img for it-'+str(it)+'.png'))
@@ -1068,18 +1061,20 @@ def plot_functions(plot_data, orientation):
           plt.grid()
           ax = plt.gca()
 
-          err_yaw+=np.nanmean(np.abs(np.abs(pred_y[t][2,:,0] - target_y[t][2,:,0])), axis=0)
+          err[2]+=np.nanmean(np.abs(np.abs(pred_y[t][2,:,0] - target_y[t][2,:,0])), axis=0)
           err_yaw_99.append(np.nanpercentile(np.abs(np.abs(pred_y[t][2,:,0] - target_y[t][2,:,0])), 99))
     #  plt.show()
       plt.legend(['Actual', 'Predicted', 'context'])
       plt.savefig(os.path.join(log_dir,'[yaw] img for it-'+str(it)+'.png'))
       plt.close()
       
-      print('MAE Test loss[Pitch, Roll, Yaw]: {:.3f}, {:.3f}, {:.3f}'.format(err_pitch/(t+1), err_roll/(t+1), err_yaw/(t+1)))
-      print('99% error Test loss[Pitch, Roll, Yaw]: {:.3f}, {:.3f}, {:.3f}'.format(np.max(err_pitch_99), np.max(err_roll_99), np.max(err_yaw_99)))
+      err_99 = [np.max(err_pitch_99), np.max(err_roll_99), np.max(err_yaw_99)]
+      
+      print('MAE Test loss[Pitch, Roll, Yaw]: {:.3f}, {:.3f}, {:.3f}'.format(err[0]/(t+1), err[1]/(t+1), err[2]/(t+1)))
+      print('99% error Test loss[Pitch, Roll, Yaw]: {:.3f}, {:.3f}, {:.3f}'.format(err_99[0],err_99[1],err_99[2]))
   else:
       err = 0
-      err_99 = 0
+      err_99 = []
       plt.figure(figsize=(6.4, 4.8*len(target_x)))
       for t in range(len(target_x)):
           plt.subplot(len(target_x),1,t+1)
@@ -1104,17 +1099,21 @@ def plot_functions(plot_data, orientation):
       plt.savefig(os.path.join(log_dir,'[' +str(orientation)+'] img for it-'+str(it)+'.png'))
       plt.close()
       
+      err_99 = np.max(err_99)
+      
       print('MAE Test loss[' +str(orientation)+']: {:.3f}'.format(err/(t+1)))
-  
+      print('99% error Test loss[' +str(orientation)+']: {:.3f}'.format(err_99))
+      
+  return err/(t+1), err_99
 '''SNP parameters'''
 TRAINING_ITERATIONS = 1000 #@param {type:"number"}
-data_length = 1000 #@param [type:"number"]
-MAX_CONTEXT_POINTS = 200  #@param {type:"number"}
-PLOT_AFTER = 200 #@param {type:"number"}
+data_length = 600 #@param [type:"number"]
+MAX_CONTEXT_POINTS = int(0.4*data_length)  #@param {type:"number"}
+PLOT_AFTER = 1000 #@param {type:"number"}
 HIDDEN_SIZE = 64 #@param {type:"number"}
 len_gen = 10 #@param [type:"number"]
-seed_test = 50 #@param [type:"number"]
-seq_delay = DELAY_SIZE
+seed_test = 400 #@param [type:"number"]
+seq_delay = DELAY_SIZE 
 MODEL_TYPE = "SNP" #@param ["NP","SNP"]
 orientation = "all" #@param ["all", "pitch","roll", "yaw"]
 
@@ -1136,13 +1135,13 @@ beta = tf.placeholder(tf.float32, shape=[])
 
 # Train dataset
 dataset_train = GPCurvesReader(
-    batch_size=6, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay)
-data_train = dataset_train.SNP_dataset(x_train,t_train, data_length=data_length)
+    batch_size=6, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, data_length = data_length)
+data_train = dataset_train.SNP_dataset(x_train,t_train)
 
 # Test dataset
 dataset_test = GPCurvesReader(
-    batch_size=3, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, testing=True, seed = seed_test)
-data_test = dataset_test.SNP_dataset(x_test,t_test, data_length =data_length)
+    batch_size=3, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, data_length = data_length, testing=True)
+data_test = dataset_test.SNP_dataset(x_test,t_test, seed = seed_test)
 
 latent_encoder_output_sizes = [HIDDEN_SIZE]*4
 num_latents = HIDDEN_SIZE
@@ -1178,28 +1177,40 @@ _, _, _, _, loss, _ = model(data_train.query,
                                     inference=True)
 
 # Generation
-mu, sigma, _, _, t_loss, _ = model(data_test.query,
+mu, sigma, _, _, _, _ = model(data_test.query,
                                         data_test.num_total_points,
                                         data_test.num_context_points,
                                         data_test.target_y,
                                         inference=False)
 
 # Set up the optimizer and train step
-optimizer = tf.train.AdamOptimizer(1e-3)
+optimizer = tf.train.AdamOptimizer(1e-4)
 train_step = optimizer.minimize(loss)
 init = tf.initialize_all_variables()
+y_plot = np.zeros(3)
+coordinate = 'yaw'
+
+saver = tf.train.Saver()
+checkpoint_path = os.path.join(log_dir, "model")
+ckpt = tf.train.get_checkpoint_state(log_dir)
+
 st = time.time()
 # Train and plot
 with tf.Session() as sess:
-  sess.run(init)
+# Initiallize the graph
+#  sess.run(init)
+    
+# Continue learning
+  saver = tf.train.import_meta_graph('model-'+str(4999)+'.meta')
+  saver.restore(sess,tf.train.latest_checkpoint('./'))
 
-  for it in range(TRAINING_ITERATIONS):
+  for it in range(5000, 5000+TRAINING_ITERATIONS):
 
     sess.run([train_step], feed_dict={beta:1.0})
 
     # Plot the predictions in `PLOT_AFTER` intervals
-    if it % PLOT_AFTER == 0 or it == (TRAINING_ITERATIONS-1):
-
+    if it % PLOT_AFTER == 0 or it == (7000+TRAINING_ITERATIONS-1):
+      
       [loss_, pred_y, std_y,
        query, target_y, plot_x] = sess.run([loss, mu, sigma,
                                              data_test.query,
@@ -1212,4 +1223,75 @@ with tf.Session() as sess:
       print('\nIteration: {}\nDuration: {:.2f}\nELBO Train loss: {:.3f}'.format(it, ft, loss_))
       
       plot_data = reordering(query, target_y, pred_y, std_y, plot_x, temporal=True)
-      plot_functions(plot_data, orientation)
+      err, err_99 = plot_functions(plot_data, orientation)
+      
+      saver.save(sess, './model', global_step=it)
+
+#mod_it = 6500
+#print('\nRealtime Plot')
+#with tf.Session() as new_sess:
+#      loader = tf.train.import_meta_graph('model-'+str(mod_it)+'.meta')
+#      loader.restore(new_sess,tf.train.latest_checkpoint('./'))
+#
+#      len_gen = 3
+#      i = 0
+#      dataset_test = GPCurvesReader(
+#        batch_size=3, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, data_length = data_length, testing=True)
+#      
+#      import  RealTimePlot_SNP as rtp
+#      
+#      st = time.time()
+#      for it in range(10):
+#          data_test = dataset_test.SNP_dataset(x_test,t_test, seed = it*(seq_delay*len_gen+data_length))
+#          mu, sigma, _, _, t_loss, _ = model(data_test.query,
+#                                            data_test.num_total_points,
+#                                            data_test.num_context_points,
+#                                            data_test.target_y,
+#                                            inference=False)
+#          [loss_, pred_y, std_y,
+#           query, target_y, plot_x] = new_sess.run([t_loss, mu, sigma,
+#                                                 data_test.query,
+#                                                 data_test.target_y,
+#                                                 data_test.plot_x],
+#                                                 feed_dict={
+#                                                 beta:1.0}
+#                                                 )
+#          ft = time.time()-st
+#          print('\nTest Iteration: {}\nDuration: {:.2f}\nELBO Test loss: {:.3f}'.format(it, ft, loss_))
+#          
+#          
+#          (context_x, context_y), target_x = query
+#          for lenG in range(len_gen+1):
+#             if lenG==(len_gen):
+#                plot_len = data_length
+#             else:
+#                plot_len = seq_delay
+#             for seqD in range(plot_len):
+#                timestamp_plot_onedata = i/60
+#                if coordinate == 'pitch':
+#                    y_plot[0] = target_y[lenG][0][seqD]
+#                    y_plot[1] = pred_y[lenG][0][seqD]
+#                    if seqD in plot_x[lenG][0][:]:
+#                        idx = np.where(plot_x[lenG][0][:]==seqD)
+#                        y_plot[2] = context_y[lenG][0][idx]
+#                    else:
+#                        y_plot[2] = 0
+#                    
+#                elif coordinate == 'roll':
+#                    y_plot[0] = target_y[lenG][1][seqD]
+#                    y_plot[1] = pred_y[lenG][1][seqD]
+#                    if seqD in plot_x[lenG][1][:]:
+#                        idx = np.where(plot_x[lenG][1][:]==seqD)
+#                        y_plot[2] = context_y[lenG][1][idx]
+#                    else:
+#                        y_plot[2] = 0
+#                elif coordinate == 'yaw':
+#                    y_plot[0] = target_y[lenG][2][seqD]
+#                    y_plot[1] = pred_y[lenG][2][seqD]
+#                    if seqD in plot_x[lenG][2][:]:
+#                        idx = np.where(plot_x[lenG][2][:]==seqD)
+#                        y_plot[2] = context_y[lenG][2][idx]
+#                    else:
+#                        y_plot[2] = 0
+#                i+=1
+#                rtp.RealTimePlot(float(timestamp_plot_onedata), y_plot)
