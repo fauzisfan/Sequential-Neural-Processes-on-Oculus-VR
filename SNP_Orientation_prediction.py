@@ -1198,11 +1198,11 @@ st = time.time()
 # Train and plot
 with tf.Session() as sess:
 # Initiallize the graph
-#  sess.run(init)
+  sess.run(init)
     
 # Continue learning
-  saver = tf.train.import_meta_graph('model-'+str(4999)+'.meta')
-  saver.restore(sess,tf.train.latest_checkpoint('./'))
+#  saver = tf.train.import_meta_graph('model-'+str(4999)+'.meta')
+#  saver.restore(sess,tf.train.latest_checkpoint('./'))
 
   for it in range(5000, 5000+TRAINING_ITERATIONS):
 
@@ -1228,7 +1228,7 @@ with tf.Session() as sess:
       saver.save(sess, './model', global_step=it)
 
 #mod_it = 6500
-#print('\nRealtime Plot')
+#print('\nRealtime Testing')
 #with tf.Session() as new_sess:
 #      loader = tf.train.import_meta_graph('model-'+str(mod_it)+'.meta')
 #      loader.restore(new_sess,tf.train.latest_checkpoint('./'))
