@@ -26,20 +26,19 @@ def create_directory(directory):
 log_dir = os.path.join("logs_SNPOrientation", "test_data")
 create_directory(log_dir)
 
-try:
-	stored_df_quat = pd.read_csv('20200420_scene(3)_user(1).csv')
-	train_gyro_data = np.array(stored_df_quat[['angular_vec_x', 'angular_vec_y', 'angular_vec_z']], dtype=np.float32)
-	train_acce_data = np.array(stored_df_quat[['acceleration_x', 'acceleration_y', 'acceleration_z']], dtype=np.float32)
-	train_magn_data = np.array(stored_df_quat[['magnetic_x', 'magnetic_y', 'magnetic_z']], dtype=np.float32)
-	projection_data = np.array(stored_df_quat[['input_projection_left', 'input_projection_top', 'input_projection_right', 'input_projection_bottom']], dtype=np.int64)
-	train_euler_data = np.array(stored_df_quat[['input_orientation_pitch', 'input_orientation_roll', 'input_orientation_yaw']], dtype=np.float32)
-	#train_obci_data = np.array(stored_df_quat[['biosignal_0', 'biosignal_1', 'biosignal_2', 'biosignal_3', 'biosignal_4', 'biosignal_5', 'biosignal_6', 'biosignal_7']], dtype=np.float32)
-	train_time_data = np.array(stored_df_quat['timestamp'], dtype=np.int64)
-	train_time_data = train_time_data/705600000
-	train_data_id = stored_df_quat.shape[0]
-	print('\nSaved data loaded...\n')
-except:
-    raise
+'''
+#####   Getting the data    #####
+'''
+stored_df_quat = pd.read_csv('20200420_scene(3)_user(1).csv')
+train_gyro_data = np.array(stored_df_quat[['angular_vec_x', 'angular_vec_y', 'angular_vec_z']], dtype=np.float32)
+train_acce_data = np.array(stored_df_quat[['acceleration_x', 'acceleration_y', 'acceleration_z']], dtype=np.float32)
+train_magn_data = np.array(stored_df_quat[['magnetic_x', 'magnetic_y', 'magnetic_z']], dtype=np.float32)
+projection_data = np.array(stored_df_quat[['input_projection_left', 'input_projection_top', 'input_projection_right', 'input_projection_bottom']], dtype=np.int64)
+train_euler_data = np.array(stored_df_quat[['input_orientation_pitch', 'input_orientation_roll', 'input_orientation_yaw']], dtype=np.float32)
+train_time_data = np.array(stored_df_quat['timestamp'], dtype=np.int64)
+train_time_data = train_time_data/705600000
+train_data_id = stored_df_quat.shape[0]
+print('\nSaved data loaded...\n')
 
 '''
 #####   TRAINING DATA PREPROCESSING    #####
@@ -59,10 +58,8 @@ train_time_data = train_time_data[idle_period:train_data_id]
 
 train_alfa_data = np.diff(train_gyro_data, axis=0)/np.diff(train_time_data, axis=0).reshape(-1, 1)
 train_alfa_data = np.row_stack([np.zeros(shape=(1, train_alfa_data.shape[1]), dtype=np.float32), train_alfa_data])
-#train_alfa_data = train_alfa_data * np.pi / 180
 
 # Calculate the head orientation
-#train_gyro_data = train_gyro_data * np.pi / 180
 train_acce_data = train_acce_data / 9.8
 train_magn_data = train_magn_data
 train_euler_data = train_euler_data*180/np.pi
@@ -154,7 +151,7 @@ class GPCurvesReader(object):
     self._seq_delay = seq_delay
     self._len_gen  = len_gen
 
-  def NP_dataset(self, x, y):
+  def NP_dataset(self, x, y, seq_len, con_size):
     if self._orientation == "pitch" or self._orientation == "all":
         ori = 0
     elif self._orientation == "roll":
@@ -206,6 +203,8 @@ class GPCurvesReader(object):
       target_y = y_values
 
       idx = tf.random_shuffle(tf.range(num_target))
+      if seq_len>int(self._len_gen*con_size):
+          num_context = tf.constant(0)
       context_x = tf.gather(x_values, idx[:num_context], axis=1)
       context_y = tf.gather(y_values, idx[:num_context], axis=1)
       plot_x = tf.gather(x_axis, idx[:num_context], axis=1)
@@ -232,7 +231,7 @@ class GPCurvesReader(object):
         num_context_points=num_context,
         plot_x = plot_x)
     
-  def SNP_dataset(self, x, y, seed=None):
+  def SNP_dataset(self, x, y, con_size=1, seed=None):
     context_x_list, context_y_list = [], []
     target_x_list, target_y_list = [], []
     num_total_points_list = []
@@ -251,7 +250,7 @@ class GPCurvesReader(object):
     m = 0
     while m <= self._len_gen:
         idx = tf.range(i, tf.math.add(i,tf.constant(self._data_length)))
-        curve_list.append(self.NP_dataset(tf.gather(tf.constant(x),idx, axis=0),tf.gather(tf.constant(y),idx, axis=0)))
+        curve_list.append(self.NP_dataset(tf.gather(tf.constant(x),idx, axis=0),tf.gather(tf.constant(y),idx, axis=0), m, con_size))
         i = tf.math.add(i,DELAY)
         m+=1
     
@@ -1105,13 +1104,17 @@ def plot_functions(plot_data, orientation):
       print('99% error Test loss[' +str(orientation)+']: {:.3f}'.format(err_99))
       
   return err/(t+1), err_99
-'''SNP parameters'''
-TRAINING_ITERATIONS = 1000 #@param {type:"number"}
-data_length = 600 #@param [type:"number"]
+
+'''
+#####   SETTING SNP PARAMETERS    #####
+'''
+TRAINING_ITERATIONS = 5000 #@param {type:"number"}
+data_length = 500 #@param [type:"number"]
 MAX_CONTEXT_POINTS = int(0.4*data_length)  #@param {type:"number"}
 PLOT_AFTER = 1000 #@param {type:"number"}
-HIDDEN_SIZE = 64 #@param {type:"number"}
-len_gen = 10 #@param [type:"number"]
+HIDDEN_SIZE = 128 #@param {type:"number"}
+len_gen = 15 #@param [type:"number"]
+con_size = 0.5 #@param [type:"number"]
 seed_test = 400 #@param [type:"number"]
 seq_delay = DELAY_SIZE 
 MODEL_TYPE = "SNP" #@param ["NP","SNP"]
@@ -1120,7 +1123,7 @@ orientation = "all" #@param ["all", "pitch","roll", "yaw"]
 random_kernel_parameters=True #@param {type:"boolean"}
 
 tf.reset_default_graph()
-#tf.set_random_seed(2)
+tf.set_random_seed(2)
 
 beta = tf.placeholder(tf.float32, shape=[])  
 
@@ -1135,23 +1138,23 @@ beta = tf.placeholder(tf.float32, shape=[])
 
 # Train dataset
 dataset_train = GPCurvesReader(
-    batch_size=6, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, data_length = data_length)
+    batch_size=3, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, data_length = data_length)
 data_train = dataset_train.SNP_dataset(x_train,t_train)
 
 # Test dataset
 dataset_test = GPCurvesReader(
     batch_size=3, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, data_length = data_length, testing=True)
-data_test = dataset_test.SNP_dataset(x_test,t_test, seed = seed_test)
+data_test = dataset_test.SNP_dataset(x_test,t_test, con_size = con_size, seed = seed_test)
 
 latent_encoder_output_sizes = [HIDDEN_SIZE]*4
 num_latents = HIDDEN_SIZE
 deterministic_encoder_output_sizes= [HIDDEN_SIZE]*4
 decoder_output_sizes = [HIDDEN_SIZE]*2 + [2]
-use_deterministic_path = True
 
 # SNP with multihead attention
 if MODEL_TYPE == 'SNP':
-  attention = Attention(rep='mlp', output_sizes=[HIDDEN_SIZE]*2, att_type='multihead')
+#  attention = Attention(rep='mlp', output_sizes=[HIDDEN_SIZE]*2, att_type='multihead')
+  attention = Attention(rep='identity', output_sizes=[HIDDEN_SIZE], att_type='uniform')
   # Define the model
   model = TemporalLatentModel(latent_encoder_output_sizes, num_latents,
                               decoder_output_sizes,
@@ -1184,32 +1187,33 @@ mu, sigma, _, _, _, _ = model(data_test.query,
                                         inference=False)
 
 # Set up the optimizer and train step
-optimizer = tf.train.AdamOptimizer(1e-4)
+optimizer = tf.train.AdamOptimizer(1e-3)
 train_step = optimizer.minimize(loss)
 init = tf.initialize_all_variables()
-y_plot = np.zeros(3)
-coordinate = 'yaw'
 
-saver = tf.train.Saver()
-checkpoint_path = os.path.join(log_dir, "model")
-ckpt = tf.train.get_checkpoint_state(log_dir)
+#saver = tf.train.Saver()
+#checkpoint_path = os.path.join(log_dir, "model")
+#ckpt = tf.train.get_checkpoint_state(log_dir)
 
+'''
+#####   TRAINING THE SNP MODEL    #####
+'''
 st = time.time()
 # Train and plot
 with tf.Session() as sess:
 # Initiallize the graph
   sess.run(init)
     
-# Continue learning
-#  saver = tf.train.import_meta_graph('model-'+str(4999)+'.meta')
+## Continue learning
+#  saver = tf.train.import_meta_graph('model-'+str(0)+'.meta')
 #  saver.restore(sess,tf.train.latest_checkpoint('./'))
 
-  for it in range(5000, 5000+TRAINING_ITERATIONS):
+  for it in range(TRAINING_ITERATIONS):
 
     sess.run([train_step], feed_dict={beta:1.0})
 
     # Plot the predictions in `PLOT_AFTER` intervals
-    if it % PLOT_AFTER == 0 or it == (7000+TRAINING_ITERATIONS-1):
+    if it % PLOT_AFTER == 0 or it == (TRAINING_ITERATIONS-1):
       
       [loss_, pred_y, std_y,
        query, target_y, plot_x] = sess.run([loss, mu, sigma,
@@ -1225,23 +1229,29 @@ with tf.Session() as sess:
       plot_data = reordering(query, target_y, pred_y, std_y, plot_x, temporal=True)
       err, err_99 = plot_functions(plot_data, orientation)
       
-      saver.save(sess, './model', global_step=it)
+#      if (it!=0):
+#          saver.save(sess, './model', global_step=it)
 
-#mod_it = 6500
-#print('\nRealtime Testing')
+'''
+#####   TESTING THE PRE-TRAINED MODEL    #####
+'''
+#mod_it = 4000
+#y_plot = np.zeros(3)
+#coordinate = 'yaw'
+#print('\nRealtime Plot')
 #with tf.Session() as new_sess:
 #      loader = tf.train.import_meta_graph('model-'+str(mod_it)+'.meta')
 #      loader.restore(new_sess,tf.train.latest_checkpoint('./'))
-#
-#      len_gen = 3
+#      
+#      len_gen = 0
 #      i = 0
 #      dataset_test = GPCurvesReader(
-#        batch_size=3, max_num_context=MAX_CONTEXT_POINTS, orientation = orientation, len_gen = len_gen, seq_delay = seq_delay, data_length = data_length, testing=True)
+#        batch_size=3, max_num_context=2, orientation = orientation, len_gen = len_gen, seq_delay = 1, data_length = data_length, testing=True)
 #      
 #      import  RealTimePlot_SNP as rtp
 #      
 #      st = time.time()
-#      for it in range(10):
+#      for it in range(100):
 #          data_test = dataset_test.SNP_dataset(x_test,t_test, seed = it*(seq_delay*len_gen+data_length))
 #          mu, sigma, _, _, t_loss, _ = model(data_test.query,
 #                                            data_test.num_total_points,
